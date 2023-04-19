@@ -2,29 +2,39 @@
 
 import io
 import logging
-from aiohttp import web
 import functools
 import argparse
-
-from transformers import AutoModelForCTC, Wav2Vec2Processor, AutoModelForSeq2SeqLM, T5TokenizerFast
-
 import librosa
 import torch
-from safetensors.torch import load_file
+
+from aiohttp import web
+from transformers import AutoModelForCTC, Wav2Vec2Processor, AutoModelForSeq2SeqLM, T5TokenizerFast
+
+
+CACHE_DIR = "models"
+MAX_INPUT = 256
 
 
 logger = logging.getLogger(__name__)
 
 
-def map_to_result(batch):
+def transcript(sound_data, model, processor, device) -> str:
     with torch.no_grad():
-        input_values = torch.tensor(
-            batch, device="cuda").unsqueeze(0)  # , device="cuda"
+        input_values = torch.tensor(sound_data, device=device).unsqueeze(0)
         logits = model(input_values).logits
 
     pred_ids = torch.argmax(logits, dim=-1)
-    batch = processor.batch_decode(pred_ids)[0]
-    return batch
+    return processor.batch_decode(pred_ids)[0]
+
+
+def correct_text(text, model, tokenizer, device) -> str:
+    with torch.no_grad():
+        input_ids = tokenizer([text], padding="longest",
+                              max_length=MAX_INPUT,
+                              truncation=True,
+                              return_tensors="pt",).to(device)
+        outputs = model.generate(**input_ids)
+        return tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
 
 
 async def index(request: web.Request) -> web.Response:
@@ -32,42 +42,52 @@ async def index(request: web.Request) -> web.Response:
     return web.FileResponse('index.html')
 
 
-async def recognize_post(models: dict, request: web.Request) -> web.StreamResponse:
-    # get voice_id value
-    # voice_id = request.rel_url.query.get('voice_id', None)
+async def recognize_post(config: dict, request: web.Request) -> web.StreamResponse:
+    if request.headers["Content-Type"] != "audio/wav":
+        return web.Response(status=415, text="Unsupported Input Media Type")
 
-    # get text to say
-    # text = (await request.read()).decode('utf-8')
+    wav_data = await request.read()
 
-    # logger.info(f'Generating audio ({voice_id}) for text: "{text}"')
+    audio, _sr = librosa.load(io.BytesIO(
+        wav_data), sr=config['sample_rate'], mono=True)
 
-    # generate audio file
-    # data = tts.say(text, voice_id)
+    transcripted_text = transcript(audio, config['wav2vec2_model'],
+                                   config['wav2vec2_processor'], device=config['device'])
+    logger.info(f'Transcripted text: "{transcripted_text}"')
 
-    # response = web.StreamResponse()
-    # response.headers['Content-Type'] = 'audio/wav'
+    corrected_text = correct_text(transcripted_text, config['t5_ru_spell_model'],
+                                  config['t5_ru_spell_tokenizer'], device=config['device'])
+    logger.info(f'Corrected text: "{corrected_text}"')
 
-    # writer = await response.prepare(request)
-    # await writer.write(data)
-    # await writer.drain()
-
-    # return response
-    return None
+    # return transcripted_text and correct_text as json
+    return web.json_response({'transcripted_text': transcripted_text,
+                              'corrected_text': corrected_text})
 
 
 async def start_server() -> web.Application:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    if device == "cpu":
+        torch.set_num_threads(8)
+
+    WAV2VEC2_RU = "UrukHan/wav2vec2-russian"
+    T5_RU_SPELL = "UrukHan/t5-russian-spell"
+    SAMPLE_RATE = 16000  # see model specifications
+
+    logger.info(f'Loading AI models to {device}...')
+
     models = dict(
         wav2vec2_model=AutoModelForCTC.from_pretrained(
-            "UrukHan/wav2vec2-russian", cache_dir="models").to(device),
+            WAV2VEC2_RU, cache_dir=CACHE_DIR).to(device),
         wav2vec2_processor=Wav2Vec2Processor.from_pretrained(
-            "UrukHan/wav2vec2-russian", cache_dir="models", device=device),
+            WAV2VEC2_RU, cache_dir=CACHE_DIR, device=device),
 
         t5_ru_spell_model=AutoModelForSeq2SeqLM.from_pretrained(
-            "UrukHan/t5-russian-spell", cache_dir="models").to(device),
+            T5_RU_SPELL, cache_dir=CACHE_DIR).to(device),
         t5_ru_spell_tokenizer=T5TokenizerFast.from_pretrained(
-            "UrukHan/t5-russian-spell", cache_dir="models", device=device),
+            T5_RU_SPELL, cache_dir=CACHE_DIR, device=device),
+        sample_rate=SAMPLE_RATE,
+        device=device
     )
 
     app = web.Application()
@@ -82,8 +102,8 @@ async def start_server() -> web.Application:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Use Seliro TTS to generate audio files, check models at: "https://models.silero.ai/models/tts/{{language}}/{{voice_model}}"'
-    )
+        description='An AI voice to text transcription server')
+    
     parser.add_argument('-p', '--port', type=int,
                         default=3154, help='Port to listen on')
     args = parser.parse_args()
