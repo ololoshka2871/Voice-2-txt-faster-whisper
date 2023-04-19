@@ -1,13 +1,22 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Silero TTS</title>
+    <title>Voice recognition server based on UrukHan's AI</title>
     <meta charset="UTF-8">
 </head>
 <body>
-    <h1>Silero TTS</h1>
-    <p>Use Seliro TTS to generate audio files, check models at: "https://models.silero.ai/models/tts/{language}/{voice_model}"</p>
+    <h1>Voice recognition server</h1>
+    <p>Based on UrukHan's AI</p>
+    <li>Voice to text model: <a href="https://huggingface.co/UrukHan/wav2vec2-russian">UrukHan/wav2vec2-russian</a></li>
+    <li>Text auto correction model: <a href="https://huggingface.co/UrukHan/t5-russian-spell">UrukHan/t5-russian-spell</a></li>
     <h2>Usage</h2>
-    <a href="/say?text=Привет&voice_id=kseniya">[RU] GET /say?text=Привет&voice_id=kseniya</p>
+    <p>Send POST request to <span>/recognize</span> with audio data in .wav format</p>
+    <p>Returns JSON:</p>
+    <pre>
+{
+    "text": "текст распознанного аудио",
+    "confidence": 0.9
+}
+    </pre>
 </body>
 </html>
