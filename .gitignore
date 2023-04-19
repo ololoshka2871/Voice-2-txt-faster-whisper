@@ -12,3 +12,5 @@ node_modules/
 
 venv*/
 models/*.safetensors
+models/*
+!models/.placeholder
