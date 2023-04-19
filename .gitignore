@@ -1,0 +1,13 @@
+config.py
+tes.py
+__pycache__/
+chat.txt
+output.txt
+input.wav
+output.wav
+test.wav
+node_modules/
+*.pt
+.vscode/
+
+venv*/
