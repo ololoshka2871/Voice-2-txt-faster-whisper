@@ -4,6 +4,7 @@ import io
 import logging
 import functools
 import argparse
+from typing import Optional
 import librosa
 import torch
 
@@ -11,7 +12,6 @@ from aiohttp import web
 from transformers import AutoModelForCTC, Wav2Vec2Processor, AutoModelForSeq2SeqLM, T5TokenizerFast
 
 
-CACHE_DIR = "models"
 MAX_INPUT = 256
 
 
@@ -38,8 +38,10 @@ def correct_text(text, model, tokenizer, device) -> str:
 
 
 async def index(request: web.Request) -> web.Response:
+    import pathlib
+    
     # show api documentation
-    return web.FileResponse('index.html')
+    return web.FileResponse(pathlib.Path(__file__).parent.resolve().joinpath('index.html'))
 
 
 async def recognize_post(config: dict, request: web.Request) -> web.StreamResponse:
@@ -64,8 +66,9 @@ async def recognize_post(config: dict, request: web.Request) -> web.StreamRespon
                               'corrected_text': corrected_text})
 
 
-async def start_server() -> web.Application:
+async def start_server(cache_dir: Optional[str]) -> web.Application:
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    cache_dir = cache_dir if cache_dir else "models"
 
     if device == "cpu":
         torch.set_num_threads(8)
@@ -78,14 +81,14 @@ async def start_server() -> web.Application:
 
     models = dict(
         wav2vec2_model=AutoModelForCTC.from_pretrained(
-            WAV2VEC2_RU, cache_dir=CACHE_DIR).to(device),
+            WAV2VEC2_RU, cache_dir=cache_dir).to(device),
         wav2vec2_processor=Wav2Vec2Processor.from_pretrained(
-            WAV2VEC2_RU, cache_dir=CACHE_DIR, device=device),
+            WAV2VEC2_RU, cache_dir=cache_dir, device=device),
 
         t5_ru_spell_model=AutoModelForSeq2SeqLM.from_pretrained(
-            T5_RU_SPELL, cache_dir=CACHE_DIR).to(device),
+            T5_RU_SPELL, cache_dir=cache_dir).to(device),
         t5_ru_spell_tokenizer=T5TokenizerFast.from_pretrained(
-            T5_RU_SPELL, cache_dir=CACHE_DIR, device=device),
+            T5_RU_SPELL, cache_dir=cache_dir, device=device),
         sample_rate=SAMPLE_RATE,
         device=device
     )
@@ -106,8 +109,10 @@ if __name__ == '__main__':
     
     parser.add_argument('-p', '--port', type=int,
                         default=3154, help='Port to listen on')
+    parser.add_argument('-m', '--model-dir', type=str,
+                        default=None, help='Path to model directory')
     args = parser.parse_args()
 
     logger.info(f'Starting server at http://localhost:{args.port}/')
 
-    web.run_app(start_server(), port=args.port)
+    web.run_app(start_server(args.model_dir), port=args.port)
