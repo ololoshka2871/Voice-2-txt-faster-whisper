@@ -1,104 +1,71 @@
 #!/usr/bin/env python
 
-import io
+from io import BytesIO
+import os
 import logging
 import functools
 import argparse
-from typing import Optional
-import librosa
-import torch
 
 from aiohttp import web
-from transformers import AutoModelForCTC, Wav2Vec2Processor, AutoModelForSeq2SeqLM, T5TokenizerFast
 
-
-MAX_INPUT = 256
+from faster_whisper import WhisperModel
 
 
 logger = logging.getLogger(__name__)
 
 
-def transcript(sound_data, model, processor, device) -> str:
-    with torch.no_grad():
-        input_values = torch.tensor(sound_data, device=device).unsqueeze(0)
-        logits = model(input_values).logits
-
-    pred_ids = torch.argmax(logits, dim=-1)
-    return processor.batch_decode(pred_ids)[0]
-
-
-def correct_text(text, model, tokenizer, device) -> str:
-    with torch.no_grad():
-        input_ids = tokenizer([text], padding="longest",
-                              max_length=MAX_INPUT,
-                              truncation=True,
-                              return_tensors="pt",).to(device)
-        outputs = model.generate(**input_ids)
-        return tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
-
-
 async def index(request: web.Request) -> web.Response:
     import pathlib
-    
+
     # show api documentation
     return web.FileResponse(pathlib.Path(__file__).parent.resolve().joinpath('index.html'))
 
 
-async def recognize_post(config: dict, request: web.Request) -> web.StreamResponse:
+async def transcribe_post(model: WhisperModel, request: web.Request) -> web.StreamResponse:
     if request.headers["Content-Type"] != "audio/wav":
         return web.Response(status=415, text="Unsupported Input Media Type")
 
     wav_data = await request.read()
 
-    audio, _sr = librosa.load(io.BytesIO(
-        wav_data), sr=config['sample_rate'], mono=True)
+    segments, info = model.transcribe(audio=BytesIO(wav_data), vad_filter=True)
 
-    transcripted_text = transcript(audio, config['wav2vec2_model'],
-                                   config['wav2vec2_processor'], device=config['device'])
-    logger.info(f'Transcripted text: "{transcripted_text}"')
+    logger.debug(
+        f"Detected language '{info.language}' with probability {info.language_probability}")
 
-    corrected_text = correct_text(transcripted_text, config['t5_ru_spell_model'],
-                                  config['t5_ru_spell_tokenizer'], device=config['device'])
-    logger.info(f'Corrected text: "{corrected_text}"')
+    segments_result = list()
+
+    for segment in segments:
+        segments_result.append({
+            'text': segment.text,
+            'start': segment.start,
+            'end': segment.end,
+        })
 
     # return transcripted_text and correct_text as json
-    return web.json_response({'transcripted_text': transcripted_text,
-                              'corrected_text': corrected_text})
+    return web.json_response({'transcribed_segments': segments_result,
+                              'language': info.language, })
 
 
-async def start_server(cache_dir: Optional[str]) -> web.Application:
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    cache_dir = cache_dir if cache_dir else "models"
+async def start_server(model: str, compute_type: str = 'default', cache_dir: str = None) -> web.Application:
+    device = "cpu"
 
-    if device == "cpu":
-        torch.set_num_threads(8)
+    model_path = f'{cache_dir}/{model}'
 
-    WAV2VEC2_RU = "UrukHan/wav2vec2-russian"
-    T5_RU_SPELL = "UrukHan/t5-russian-spell"
-    SAMPLE_RATE = 16000  # see model specifications
+    logger.info(f'Loading AI model {model_path} to {device}...')
 
-    logger.info(f'Loading AI models to {device}...')
-
-    models = dict(
-        wav2vec2_model=AutoModelForCTC.from_pretrained(
-            WAV2VEC2_RU, cache_dir=cache_dir).to(device),
-        wav2vec2_processor=Wav2Vec2Processor.from_pretrained(
-            WAV2VEC2_RU, cache_dir=cache_dir, device=device),
-
-        t5_ru_spell_model=AutoModelForSeq2SeqLM.from_pretrained(
-            T5_RU_SPELL, cache_dir=cache_dir).to(device),
-        t5_ru_spell_tokenizer=T5TokenizerFast.from_pretrained(
-            T5_RU_SPELL, cache_dir=cache_dir, device=device),
-        sample_rate=SAMPLE_RATE,
-        device=device
-    )
+    if os.path.isdir(model_path):
+        model = WhisperModel(model_path, device=device,
+                             compute_type=compute_type, download_root=model_path)
+    else:
+        model = WhisperModel(model, device=device,
+                             compute_type=compute_type, download_root=model_path)
 
     app = web.Application()
 
     # call handle_request with tts as first argument
     app.add_routes([
         web.get('/', handler=index),
-        web.post('/recognize', handler=functools.partial(recognize_post, models))
+        web.post('/transcribe', handler=functools.partial(transcribe_post, model))
     ])
     return app
 
@@ -106,13 +73,21 @@ async def start_server(cache_dir: Optional[str]) -> web.Application:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='An AI voice to text transcription server')
-    
+
     parser.add_argument('-p', '--port', type=int,
-                        default=3154, help='Port to listen on')
-    parser.add_argument('-m', '--model-dir', type=str,
-                        default=None, help='Path to model directory')
+                        default=3157, help='Port to listen on')
+    parser.add_argument('-m', '--model',
+                        help='Model name, see https://github.com/openai/whisper#available-models-and-languages',
+                        default='medium')
+    parser.add_argument('-t', '--compute-type', type=str,
+                        help='default, float16, int8', default='default')
+    parser.add_argument('-d', '--model-dir',
+                        type=str,
+                        help='Path to model directory',
+                        default='models')
     args = parser.parse_args()
 
     logger.info(f'Starting server at http://localhost:{args.port}/')
 
-    web.run_app(start_server(args.model_dir), port=args.port)
+    web.run_app(start_server(args.model, args.compute_type,
+                args.model_dir), port=args.port)

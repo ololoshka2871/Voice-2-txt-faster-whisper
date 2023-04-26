@@ -1,30 +1,32 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Voice recognition server based on UrukHan's AI</title>
+    <title>Voice recognition server based on OpenAI whisper (faster-whisper)</title>
     <meta charset="UTF-8">
 </head>
 <body>
     <h1>Voice recognition server</h1>
-    <p>Based on UrukHan's AI</p>
-    <li>Voice to text model: <a href="https://huggingface.co/UrukHan/wav2vec2-russian">UrukHan/wav2vec2-russian</a></li>
-    <li>Text auto correction model: <a href="https://huggingface.co/UrukHan/t5-russian-spell">UrukHan/t5-russian-spell</a></li>
+    <p>Based on OpenAI whisper (faster-whisper)</p>
     <h2>Usage</h2>
-    <p>Send POST request to <span>/recognize</span> with audio data in .wav format</p>
+    <p>Send POST request to <span>/transcribe</span> with audio data in .wav format</p>
     <p>Returns JSON:</p>
     <pre>
 {
-    "transcripted_text": "russian text from transcripted audio", 
-    "corrected_text": "corrected russian text"
+    "transcribed_segments": [
+        {"text": "<transcribed text>", "start": <start_time>, "end": <end_time>}
+    ],
+    "language": "<lang code>"
 }
     </pre>
     <h2>Example</h2>
     Based on <a href="https://stackoverflow.com/a/48793166">this answer</a> on StackOverflow
     <pre>
-$ curl -XPOST -T speech.wav -H "Content-Type: audio/wav" http://localhost:3154/recognize
+$ curl -XPOST -T speech.wav -H "Content-Type: audio/wav" http://localhost:3157/recognize
 {
-    "transcripted_text": "\u0440\u0430\u0441 \u0434\u0432\u0430 \u0442\u0440\u0438", 
-    "corrected_text": "\u0420\u0430\u0437, \u0434\u0432\u0430, \u0442\u0440\u0438."
+    "transcribed_segments": [
+        {"text": " 1, 2, 3", "start": 0.3, "end": 2.3}
+    ], 
+    "language": "ru"
 }
     </pre>
 </body>
