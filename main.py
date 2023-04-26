@@ -46,9 +46,7 @@ async def transcribe_post(model: WhisperModel, request: web.Request) -> web.Stre
                               'language': info.language, })
 
 
-async def start_server(model: str, compute_type: str = 'default', cache_dir: str = None) -> web.Application:
-    device = "cpu"
-
+async def start_server(model: str, compute_type: str = 'default', cache_dir: str = None, device: str = 'cpu') -> web.Application:
     model_path = f'{cache_dir}/{model}'
 
     logger.info(f'Loading AI model {model_path} to {device}...')
@@ -85,9 +83,10 @@ if __name__ == '__main__':
                         type=str,
                         help='Path to model directory',
                         default='models')
+    parser.add_argument('-c', '--device', type=str, default='cpu', help='torch device to use')
     args = parser.parse_args()
 
     logger.info(f'Starting server at http://localhost:{args.port}/')
 
     web.run_app(start_server(args.model, args.compute_type,
-                args.model_dir), port=args.port)
+                args.model_dir, args.device), port=args.port)
